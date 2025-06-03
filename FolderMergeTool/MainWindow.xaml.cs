@@ -66,7 +66,11 @@ namespace FolderMergeTool
                 MessageBox.Show("请确保所有文件夹路径均有效。", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
-            var conflicts = FindConflicts(aPath, bPath);
+            var dictBase = GetFileHashDict(basePath);
+            var dictA = GetFileHashDict(aPath);
+            var dictB = GetFileHashDict(bPath);
+
+            var conflicts = GetConflictFiles(dictBase, dictA, dictB);
             if (conflicts.Count > 0)
             {
                 foreach (var file in conflicts)
@@ -86,9 +90,82 @@ namespace FolderMergeTool
             }
             Directory.CreateDirectory(resultPath);
             CopyAll(basePath, resultPath);
-            CopyAll(aPath, resultPath);
-            CopyAll(bPath, resultPath);
+            var allKeys = new HashSet<string>(dictA.Keys);
+            allKeys.UnionWith(dictB.Keys);
+            foreach (var key in allKeys)
+            {
+                dictBase.TryGetValue(key, out var hashBase);
+                dictA.TryGetValue(key, out var hashA);
+                dictB.TryGetValue(key, out var hashB);
+                string destFile = Path.Combine(resultPath, key);
+                string srcFile = GetMergeSourceFile(aPath, bPath, key, hashBase, hashA, hashB);
+                if (!string.IsNullOrEmpty(srcFile))
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(destFile));
+                    File.Copy(srcFile, destFile, true);
+                }
+            }
             MessageBox.Show($"合并完成，结果文件夹：{resultPath}", "完成", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        /// <summary>
+        /// 判断冲突文件列表
+        /// </summary>
+        private List<string> GetConflictFiles(Dictionary<string, string> dictBase, Dictionary<string, string> dictA, Dictionary<string, string> dictB)
+        {
+            var conflicts = new List<string>();
+            var allKeys = new HashSet<string>(dictA.Keys);
+            allKeys.IntersectWith(dictB.Keys);
+            foreach (var key in allKeys)
+            {
+                dictBase.TryGetValue(key, out var hashBase);
+                dictA.TryGetValue(key, out var hashA);
+                dictB.TryGetValue(key, out var hashB);
+                // 三者哈希均不同，判定为冲突
+                if (!string.IsNullOrEmpty(hashBase) && !string.IsNullOrEmpty(hashA) && !string.IsNullOrEmpty(hashB)
+                    && hashA != hashBase && hashB != hashBase && hashA != hashB)
+                {
+                    conflicts.Add(key);
+                }
+            }
+            return conflicts;
+        }
+
+        /// <summary>
+        /// 根据哈希关系决定合并时应拷贝哪个文件，若返回空则保留Base文件
+        /// </summary>
+        private string GetMergeSourceFile(string aPath, string bPath, string key, string hashBase, string hashA, string hashB)
+        {
+            // A与Base相同，B不同，拷贝B
+            if (!string.IsNullOrEmpty(hashBase) && hashA == hashBase && !string.IsNullOrEmpty(hashB) && hashB != hashBase)
+            {
+                return Path.Combine(bPath, key);
+            }
+            // B与Base相同，A不同，拷贝A
+            else if (!string.IsNullOrEmpty(hashBase) && hashB == hashBase && !string.IsNullOrEmpty(hashA) && hashA != hashBase)
+            {
+                return Path.Combine(aPath, key);
+            }
+            // A与B相同且与Base不同，拷贝A（也可以拷贝B）
+            else if (!string.IsNullOrEmpty(hashA) && !string.IsNullOrEmpty(hashB) && hashA == hashB && (string.IsNullOrEmpty(hashBase) || hashA != hashBase))
+            {
+                return Path.Combine(aPath, key);
+            }
+            // 仅A存在且与Base不同，拷贝A
+            else if (!string.IsNullOrEmpty(hashA) && (string.IsNullOrEmpty(hashBase) || hashA != hashBase) && string.IsNullOrEmpty(hashB))
+            {
+                return Path.Combine(aPath, key);
+            }
+            // 仅B存在且与Base不同，拷贝B
+            else if (!string.IsNullOrEmpty(hashB) && (string.IsNullOrEmpty(hashBase) || hashB != hashBase) && string.IsNullOrEmpty(hashA))
+            {
+                return Path.Combine(bPath, key);
+            }
+            // 其他情况（如三者哈希均不同或都相同），返回空，保留Base
+            else
+            {
+                return null;
+            }
         }
 
         private void SaveConflictListButtonState(bool enabled)
@@ -97,23 +174,6 @@ namespace FolderMergeTool
             {
                 btn.IsEnabled = enabled;
             }
-        }
-        private List<string> FindConflicts(string folderA, string folderB)
-        {
-            var dictA = GetFileHashDict(folderA);
-            var dictB = GetFileHashDict(folderB);
-            var conflicts = new List<string>();
-            foreach (var kv in dictA)
-            {
-                if (dictB.TryGetValue(kv.Key, out var hashB))
-                {
-                    if (kv.Value != hashB)
-                    {
-                        conflicts.Add(kv.Key);
-                    }
-                }
-            }
-            return conflicts;
         }
 
         private Dictionary<string, string> GetFileHashDict(string folder)
